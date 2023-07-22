@@ -17,6 +17,7 @@ void add_binary(vector<int>& binary) {
     int value = distr(engine);
     binary.push_back(value);
     cout << "Wrote number " <<  value << " to the end" << endl;
+    this_thread::sleep_for(800ms);
 }
 void read_binary(const vector<int>& binary) {
     shared_lock<shared_mutex> lock(task_mutex);
