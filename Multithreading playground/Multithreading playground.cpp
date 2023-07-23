@@ -5,65 +5,91 @@
 #include <string>
 #include <shared_mutex>
 using namespace std;
-random_device randint;
-mt19937 engine(randint());
-uniform_int_distribution<int> distr(0, 1);
-uniform_int_distribution<int> ind(0, 4);
 
-shared_mutex task_mutex;
 
-void add_binary(vector<int>& binary) {
-    lock_guard<shared_mutex> lock(task_mutex);
-    int value = distr(engine);
-    binary.push_back(value);
-    cout << "Wrote number " <<  value << " to the end" << endl;
-    this_thread::sleep_for(800ms);
-}
-void read_binary(const vector<int>& binary) {
-    shared_lock<shared_mutex> lock(task_mutex);
-    if (binary.empty()) {
-        cout << "Empty" << endl;
+mutex data_mutex;
+mutex completed_mutex;
+mutex output_mutex;
+
+vector<char> final_message;
+
+bool completed = false;
+bool progress = false;
+
+
+void download(string message) {
+    
+    size_t size = message.size();
+    if (size == 0) {
+        lock_guard<mutex> completed_lock(completed_mutex);
+        bool completed = true;
         return;
     }
-    int octet = 0;
-    for (auto i : binary) {
-        cout << i;
-        octet++;
-        if (octet == 4) {
-            cout << ' ';
-            octet = 0;
+    
+    for (size_t i{}; i < size; i++) {
+        this_thread::sleep_for(100ms);
+        lock_guard<mutex> lock(data_mutex);
+        progress = true;
+        final_message.push_back(message[i]);
+        
+    }
+    lock_guard<mutex> completed_lock(completed_mutex);
+    completed = true;
+}
+void progress_bar() {
+    while (true) {
+        unique_lock<mutex> completed_lock(completed_mutex);
+        if (completed) {
+            lock_guard<mutex> output_lock(output_mutex);
+            cout << " 100%\nDownload is completed" << endl;
+            return;
         }
+        completed_lock.unlock();
+        unique_lock<mutex> data_lock(data_mutex);
+        while (!progress) {
+            data_lock.unlock();
+            this_thread::sleep_for(100ms);
+            data_lock.lock();
+        }
+        progress = false;
+        lock_guard<mutex> output_lock(output_mutex);
+        cout << "#";
+        
+    }
+}
+void completion() {
+    unique_lock<mutex> completed_lock(completed_mutex);
+    while (!completed) {
+        completed_lock.unlock();
+        this_thread::sleep_for(100ms);
+        completed_lock.lock();
+    }
+    completed_lock.unlock();
+    lock_guard<mutex> lock(data_mutex);
+    unique_lock<mutex> output_lock(output_mutex, defer_lock);
+    if (final_message.size() == 0) {
+        output_lock.lock();
+        cout << "Empty file" << endl;
+        return;
+    }
+    output_lock.lock();
+    for (auto c : final_message) {
+        cout << c;
     }
     cout << endl;
-
 }
-
 
 int main()
 {
-    cout << "Enter how many threads would you like to launch" << ' ';
-    int num;
-    cin >> num;
+    string message;
+    getline(cin, message);
     cin.ignore();
-    vector<int> data;
-    vector <thread> threads;
-    for (int i{}; i < num; i++) {
-        int choise = distr(engine);
-        switch (choise) {
-        case 0:
-            threads.push_back(thread(add_binary, ref(data)));
-            threads[i].join();
-            break;
-        case 1:
-            threads.push_back(thread(read_binary, ref(data)));
-            threads[i].join();
-            break;
-        default:
-            continue;
-            break;
-        }
-        
-    }
+    thread downloading_thread(download, message);
+    thread progress_bar_thread(progress_bar);
+    thread completion_thread(completion);
+    downloading_thread.join();
+    progress_bar_thread.join();
+    completion_thread.join();
     return 0;
 }
 
