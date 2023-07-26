@@ -4,75 +4,63 @@
 #include <random>
 #include <string>
 #include <shared_mutex>
+#include <condition_variable>
 using namespace std;
 
-
+struct Conditions {
+    condition_variable completed;
+    bool is_completed = false;;
+    condition_variable progress;
+    bool has_progress = false;
+};
+Conditions conditions;
 mutex data_mutex;
-mutex completed_mutex;
-mutex output_mutex;
+mutex completion_mutex;
 
 vector<char> final_message;
 
-bool completed = false;
-bool progress = false;
+
 
 
 void download(string message) {
-    
     size_t size = message.size();
     if (size == 0) {
-        lock_guard<mutex> completed_lock(completed_mutex);
-        bool completed = true;
+        conditions.completed.notify_all();
         return;
     }
-    
+    conditions.is_completed = false;
+    conditions.has_progress = false;
     for (size_t i{}; i < size; i++) {
         this_thread::sleep_for(100ms);
         lock_guard<mutex> lock(data_mutex);
-        progress = true;
         final_message.push_back(message[i]);
-        
+        conditions.has_progress = true;
+        conditions.progress.notify_all();
     }
-    lock_guard<mutex> completed_lock(completed_mutex);
-    completed = true;
+    this_thread::sleep_for(100ms);
+    conditions.is_completed = true;
+    conditions.completed.notify_all();
 }
 void progress_bar() {
     while (true) {
-        unique_lock<mutex> completed_lock(completed_mutex);
-        if (completed) {
-            lock_guard<mutex> output_lock(output_mutex);
-            cout << " 100%\nDownload is completed" << endl;
+        unique_lock<mutex> data_lock(data_mutex);
+        if (conditions.is_completed) {
             return;
         }
-        completed_lock.unlock();
-        unique_lock<mutex> data_lock(data_mutex);
-        while (!progress) {
-            data_lock.unlock();
-            this_thread::sleep_for(100ms);
-            data_lock.lock();
-        }
-        progress = false;
-        lock_guard<mutex> output_lock(output_mutex);
+        conditions.progress.wait(data_lock, [] { return conditions.has_progress; });
         cout << "#";
-        
+        conditions.has_progress = false;
     }
 }
 void completion() {
-    unique_lock<mutex> completed_lock(completed_mutex);
-    while (!completed) {
-        completed_lock.unlock();
-        this_thread::sleep_for(100ms);
-        completed_lock.lock();
-    }
-    completed_lock.unlock();
+    unique_lock<mutex> completed_lock(completion_mutex);
+    conditions.completed.wait(completed_lock, [] {return conditions.is_completed; });
+    cout << " 100%\nDownload is completed" << endl;
     lock_guard<mutex> lock(data_mutex);
-    unique_lock<mutex> output_lock(output_mutex, defer_lock);
     if (final_message.size() == 0) {
-        output_lock.lock();
         cout << "Empty file" << endl;
         return;
     }
-    output_lock.lock();
     for (auto c : final_message) {
         cout << c;
     }
@@ -83,7 +71,6 @@ int main()
 {
     string message;
     getline(cin, message);
-    cin.ignore();
     thread downloading_thread(download, message);
     thread progress_bar_thread(progress_bar);
     thread completion_thread(completion);
